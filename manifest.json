@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "abdulghani.pritunl",
+  "name": "Pritunl VPN",
+  "version": "1.0.0",
+  "author": "Abdul Ghani",
+  "description": "Connect and disconnect Pritunl VPN profiles from the Omarchy bar, with PIN and one-time code prompts",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Pritunl VPN",
+    "description": "Connect Pritunl VPN profiles and see connection status",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  },
+  "license": "MIT"
+}
