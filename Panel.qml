@@ -12,6 +12,8 @@ import "Model.js" as Model
 Panel {
   id: root
   moduleName: "abdulghani.pritunl"
+  // Lets a keybinding open the popup: omarchy-shell abdulghani.pritunl toggle
+  ipcTarget: "abdulghani.pritunl"
 
   readonly property string scriptPath: Qt.resolvedUrl("profiles.sh").toString().replace(/^file:\/\//, "")
   readonly property string importScriptPath: Qt.resolvedUrl("add-profile.sh").toString().replace(/^file:\/\//, "")
@@ -522,19 +524,59 @@ Panel {
           spacing: Style.space(2)
           visible: root.profiles.length > 1
 
+          // Name on the left and status pinned on the right. A long name is
+          // cut off with an ellipsis rather than pushing the status out of the
+          // panel, since the status is the part that has to stay readable.
           Repeater {
             model: root.profiles
 
-            Button {
+            CursorSurface {
+              id: profileRow
               required property var modelData
+              readonly property bool isSelected: root.selectedProfile !== null && modelData.id === root.selectedProfile.id
+              readonly property string phase: Model.phase(modelData)
+
               width: parent.width
-              leftAlign: true
-              selected: root.selectedProfile !== null && modelData.id === root.selectedProfile.id
-              text: modelData.name + "   ·   " + Model.phaseLabel(Model.phase(modelData))
+              implicitHeight: Math.max(profileName.implicitHeight, profileStatus.implicitHeight) + Style.spacing.xl
+              hasCursor: profileMouse.containsMouse
+              current: isSelected
               foreground: root.foreground
-              fontFamily: root.fontFamily
-              fontSize: Style.font.bodySmall
-              onClicked: root.selectProfile(modelData.id)
+
+              Text {
+                id: profileName
+                textFormat: Text.PlainText
+                text: profileRow.modelData.name
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: profileRow.isSelected
+                elide: Text.ElideRight
+                anchors.left: parent.left
+                anchors.right: profileStatus.left
+                anchors.leftMargin: Style.spacing.rowPaddingX
+                anchors.rightMargin: Style.space(12)
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Text {
+                id: profileStatus
+                textFormat: Text.PlainText
+                text: Model.phaseLabel(profileRow.phase)
+                color: profileRow.phase === "connected" ? root.foreground : root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                anchors.right: parent.right
+                anchors.rightMargin: Style.spacing.rowPaddingX
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              MouseArea {
+                id: profileMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.selectProfile(profileRow.modelData.id)
+              }
             }
           }
         }

@@ -27,6 +27,8 @@ popup:   󰖂  OsomeVPN-Developers                  [  ●]
 - **Left-click** the bar — open the popup
 - **Right-click** — disconnect when connected; otherwise open the popup
 - **Middle-click** — refresh now
+- **From a keybinding** — `omarchy-shell abdulghani.pritunl toggle` (also `open`
+  and `close`)
 
 The switch in the header connects or disconnects the selected profile. While a
 connection is being set up the header follows the client through
