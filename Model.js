@@ -107,6 +107,17 @@ function password(mode, values) {
   return out
 }
 
+// Output of a command run as `cmd 2>&1; echo "__exit $?"`: the exit status from
+// the last line, and everything before it joined as the message.
+function commandResult(output) {
+  var lines = String(output || "").trim().split("\n")
+  var match = /^__exit (\d+)$/.exec(lines[lines.length - 1] || "")
+  return {
+    status: match ? Number(match[1]) : 1,
+    message: (match ? lines.slice(0, -1) : lines).join(" ").trim()
+  }
+}
+
 // Every field filled in, so Connect has something to send.
 function ready(mode, values, username) {
   var c = credentials(mode)

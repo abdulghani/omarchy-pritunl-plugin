@@ -6,14 +6,15 @@ import qs.Ui
 import "Model.js" as Model
 
 // Pritunl VPN profiles in the bar: a status icon, and a popup that connects,
-// disconnects, and asks for whatever sign-in the selected profile needs.
-// Everything goes through the pritunl-client CLI, which drives
+// disconnects, imports profiles, and asks for whatever sign-in the selected
+// profile needs. Everything goes through the pritunl-client CLI, which drives
 // pritunl-client-service; the widget keeps no state beyond what is being typed.
 Panel {
   id: root
   moduleName: "abdulghani.pritunl"
 
   readonly property string scriptPath: Qt.resolvedUrl("profiles.sh").toString().replace(/^file:\/\//, "")
+  readonly property string importScriptPath: Qt.resolvedUrl("add-profile.sh").toString().replace(/^file:\/\//, "")
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
@@ -25,6 +26,9 @@ Panel {
   property var profiles: []
   property string listError: ""
   property string selectedId: ""
+  // When the reading in flight started, so an import only trusts a reading
+  // taken after it finished.
+  property real listStartedAt: 0
 
   // Sign-in fields for the selected profile. Codes are cleared the moment a
   // connection starts; the username is kept, since it is not a secret.
@@ -41,6 +45,19 @@ Panel {
   property string actionError: ""
   property string failureText: ""
   property string failureDetail: ""
+
+  // Profile import. The ids from before an import tell a new profile apart
+  // from one the client updated in place.
+  property string importText: ""
+  property string importMessage: ""
+  property bool importFailed: false
+  property var idsBeforeImport: []
+  property real importFinishedAt: 0
+  property bool awaitingImportedList: false
+  // The file chooser opens with the popup closed, so it is not buried under
+  // it; the popup comes back to show how the import went.
+  property bool reopenAfterImport: false
+  readonly property bool importing: pickProc.running || importProc.running
 
   readonly property var selectedProfile: profileById(selectedId) || (profiles.length > 0 ? profiles[0] : null)
   readonly property var connectedProfile: {
@@ -104,6 +121,7 @@ Panel {
       root.selectedId = up ? up.id : (s.profiles.length > 0 ? s.profiles[0].id : "")
     }
 
+    if (root.awaitingImportedList && root.listStartedAt >= root.importFinishedAt) root.reportImport(s.profiles)
     root.trackAttempt()
   }
 
@@ -160,12 +178,9 @@ Panel {
   }
 
   function finishAction(output) {
-    var lines = String(output || "").trim().split("\n")
-    var last = lines.length > 0 ? lines[lines.length - 1] : ""
-    var status = /^__exit (\d+)$/.test(last) ? Number(last.replace("__exit ", "")) : 1
-    if (status !== 0) {
-      var message = lines.slice(0, -1).join(" ").trim()
-      root.actionError = message !== "" ? message : "pritunl-client exited with status " + status
+    var result = Model.commandResult(output)
+    if (result.status !== 0) {
+      root.actionError = result.message !== "" ? result.message : "pritunl-client exited with status " + result.status
       root.endAttempt()
     }
     root.sample()
@@ -206,6 +221,60 @@ Panel {
     focusTimer.restart()
   }
 
+  // ---- Import --------------------------------------------------------------
+
+  function importSource(source) {
+    var s = String(source || "").trim()
+    if (s === "" || importProc.running) return
+    root.importMessage = ""
+    root.importFailed = false
+    root.idsBeforeImport = root.profiles.map(function (p) { return p.id })
+    importProc.command = ["sh", "-c", "\"$0\" \"$1\" 2>&1; echo \"__exit $?\"", root.importScriptPath, s]
+    importProc.running = true
+  }
+
+  function pickProfileFile() {
+    if (root.importing) return
+    root.importMessage = ""
+    root.importFailed = false
+    root.reopenAfterImport = true
+    root.close()
+    pickProc.running = true
+  }
+
+  function finishImport(output) {
+    var result = Model.commandResult(output)
+    if (result.status !== 0) {
+      root.importFailed = true
+      root.importMessage = result.message !== "" ? result.message : "Import failed."
+      root.showImportResult()
+      return
+    }
+    root.importText = ""
+    root.importFinishedAt = Date.now()
+    root.awaitingImportedList = true
+    root.sample()
+  }
+
+  function reportImport(profiles) {
+    root.awaitingImportedList = false
+    var added = profiles.filter(function (p) { return root.idsBeforeImport.indexOf(p.id) < 0 })
+    root.importFailed = false
+    if (added.length > 0) {
+      root.selectProfile(added[0].id)
+      root.importMessage = added.length === 1 ? "Added " + added[0].name + "." : "Added " + added.length + " profiles."
+    } else {
+      root.importMessage = "That profile was already here, so it was updated."
+    }
+    root.showImportResult()
+  }
+
+  function showImportResult() {
+    if (!root.reopenAfterImport) return
+    root.reopenAfterImport = false
+    root.open()
+  }
+
   onOpenedChanged: {
     if (!opened) return
     sample()
@@ -218,6 +287,7 @@ Panel {
   Process {
     id: listProc
     command: [root.scriptPath]
+    onStarted: root.listStartedAt = Date.now()
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applySample(text)
@@ -237,6 +307,38 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.failureDetail = text.trim().slice(0, 240)
+    }
+  }
+
+  // Exits 1 with nothing printed when the chooser is cancelled, which needs
+  // no message; a chooser that could not open says why on stderr.
+  Process {
+    id: pickProc
+    command: ["omarchy-file-select", "--title", "Import Pritunl profile", "--extensions", "ovpn tar zip"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var path = text.split("\n")[0].trim()
+        if (path !== "") root.importSource(path)
+        else if (!root.importFailed) root.reopenAfterImport = false
+      }
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (text.trim() === "") return
+        root.importFailed = true
+        root.importMessage = text.trim()
+        root.showImportResult()
+      }
+    }
+  }
+
+  Process {
+    id: importProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.finishImport(text)
     }
   }
 
@@ -398,9 +500,9 @@ Panel {
           wrapMode: Text.WordWrap
           textFormat: Text.PlainText
           text: !root.installed
-            ? "Install pritunl-client-electron from the AUR, then import a profile in the Pritunl app."
+            ? "Install pritunl-client-electron from the AUR, then add a profile here."
             : root.listError !== "" ? root.listError
-            : root.profiles.length === 0 ? "No profiles yet. Import one in the Pritunl app." : ""
+            : root.profiles.length === 0 ? "No profiles yet. Add one below with a pritunl:// link or a profile file." : ""
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -427,7 +529,7 @@ Panel {
               required property var modelData
               width: parent.width
               leftAlign: true
-              selected: modelData.id === root.selectedProfile.id
+              selected: root.selectedProfile !== null && modelData.id === root.selectedProfile.id
               text: modelData.name + "   ·   " + Model.phaseLabel(Model.phase(modelData))
               foreground: root.foreground
               fontFamily: root.fontFamily
@@ -504,6 +606,73 @@ Panel {
               opacity: root.canConnect ? 1.0 : 0.5
               onClicked: root.connect()
             }
+          }
+        }
+
+        // ---------- Add profile ----------
+        PanelSeparator { foreground: root.foreground; visible: root.installed }
+
+        PanelSectionHeader {
+          text: "ADD PROFILE"
+          foreground: root.foreground
+          visible: root.installed
+        }
+
+        Column {
+          width: parent.width
+          spacing: Style.space(6)
+          visible: root.installed
+
+          TextField {
+            id: importField
+            width: parent.width
+            placeholderText: "Paste a pritunl:// link or a file path"
+            foreground: root.foreground
+            enabled: !root.importing
+            text: root.importText
+            onTextChanged: if (text !== root.importText) root.importText = text
+            onAccepted: root.importSource(root.importText)
+            Keys.onEscapePressed: root.close()
+          }
+
+          Item {
+            width: parent.width
+            implicitHeight: Math.max(importFileButton.implicitHeight, addButton.implicitHeight)
+
+            Button {
+              id: importFileButton
+              anchors.left: parent.left
+              text: "Import file…"
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              enabled: !root.importing
+              opacity: enabled ? 1.0 : 0.5
+              onClicked: root.pickProfileFile()
+            }
+
+            Button {
+              id: addButton
+              anchors.right: parent.right
+              text: root.importing ? "Importing…" : "Add"
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              enabled: !root.importing && root.importText.trim() !== ""
+              opacity: enabled ? 1.0 : 0.5
+              onClicked: root.importSource(root.importText)
+            }
+          }
+
+          Text {
+            visible: root.importMessage !== ""
+            width: parent.width
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: root.importMessage
+            color: root.importFailed ? root.urgent : root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
           }
         }
 
