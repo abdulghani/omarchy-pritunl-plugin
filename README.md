@@ -10,6 +10,7 @@ bar:     󰖂        <- dim while disconnected, full colour once connected
 popup:   󰖂  OsomeVPN-Developers                  [  ●]
             Connected · 12m
             192.168.220.84
+         ↓ Downstream  3.1 Mbps       ↑ Upstream  240 kbps
          ─────────────────────────────────
          PROFILES                     (only with more than one)
          OsomeVPN-Developers           Connected
@@ -35,6 +36,14 @@ connection is being set up the header follows the client through
 *Connecting…*, *Authenticating…*, and *Reconnecting…*; a connection that falls
 back to disconnected without ever coming up is reported as failed, with the
 client's last log line about it.
+
+**Speed** — while the popup is open on the connected profile, a line under the
+header shows its **downstream** and **upstream** speed, refreshed every second.
+It is read from the tunnel's own traffic counters, so it is the VPN's traffic
+only, not everything the laptop is doing. Speeds are in bits per second (kbps,
+Mbps), the way network speeds are quoted and the way Omarchy's own speed test
+reports them. Nothing is measured while the popup is closed, and reopening it
+starts afresh rather than averaging over the time it was shut.
 
 **Sign-in fields** follow each profile's password mode, the same way the
 Pritunl app decides what to ask for:
@@ -119,6 +128,14 @@ cannot cover it, and the popup reopens to show how the import went.
 
 Polling is every second while a connection is changing, every 3 seconds while
 the popup is open, and every 15 seconds otherwise.
+
+`pritunl-client list` does not say which network interface a profile's tunnel
+uses, so `profiles.sh` finds it: the interface holding the connected profile's
+client address. While the popup is open, `traffic.sh` reads that interface's
+`rx_bytes` and `tx_bytes` from `/sys/class/net/<interface>/statistics` with
+the time from `/proc/uptime`, once a second, and the panel divides the change
+in bytes by the change in time. Counters that go backwards, which happens when
+a tunnel is rebuilt, are skipped rather than shown as a spike.
 
 ## License
 

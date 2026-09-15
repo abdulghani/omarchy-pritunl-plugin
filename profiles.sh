@@ -4,11 +4,15 @@
 #   { "installed": true|false,
 #     "profiles": [ { id, name, run_state, connected, status, uptime,
 #                     server_address, client_address, system,
-#                     password_mode }, ... ],
+#                     password_mode, interface }, ... ],
 #     "error": "<message>" }          (only when the list could not be read)
 #
 # password_mode is not part of `pritunl-client list`; the client keeps it in
 # each user profile's conf, so it is joined in from there ("" when unknown).
+#
+# interface is not part of the list either. For a connected profile it is the
+# network interface holding the profile's client address, which is where its
+# traffic counters live; "" for a profile that is not connected.
 
 set -uo pipefail
 export LC_ALL=C
@@ -33,8 +37,15 @@ for conf in "$conf_dir"/*.conf; do
   modes=$(jq -c --arg id "$(basename "$conf" .conf)" --arg m "$mode" '. + {($id): $m}' <<<"$modes")
 done
 
-jq -c --argjson modes "$modes" '
+ifaces=$(ip -j addr 2>/dev/null | jq -c '[.[] | {name: .ifname, addrs: [.addr_info[]?.local]}]' 2>/dev/null)
+[ -n "$ifaces" ] || ifaces='[]'
+
+jq -c --argjson modes "$modes" --argjson ifaces "$ifaces" '
   { installed: true,
     profiles: [ (if type == "array" then .[] else empty end)
-                | . + { password_mode: ($modes[.id] // "") } ] }' <<<"$list" 2>/dev/null ||
+                | ((.client_address // "") | split("/")[0]) as $addr
+                | . + { password_mode: ($modes[.id] // ""),
+                        interface: (if .connected == true and $addr != ""
+                                    then ([$ifaces[] | select(.addrs | index($addr)) | .name] | first // "")
+                                    else "" end) } ] }' <<<"$list" 2>/dev/null ||
   jq -cn '{installed: true, profiles: [], error: "The Pritunl client returned an unreadable profile list."}'

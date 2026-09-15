@@ -17,6 +17,7 @@ Panel {
 
   readonly property string scriptPath: Qt.resolvedUrl("profiles.sh").toString().replace(/^file:\/\//, "")
   readonly property string importScriptPath: Qt.resolvedUrl("add-profile.sh").toString().replace(/^file:\/\//, "")
+  readonly property string trafficScriptPath: Qt.resolvedUrl("traffic.sh").toString().replace(/^file:\/\//, "")
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
@@ -31,6 +32,22 @@ Panel {
   // When the reading in flight started, so an import only trusts a reading
   // taken after it finished.
   property real listStartedAt: 0
+
+  // Upstream and downstream speed of the connected tunnel. It is only measured
+  // while the popup is open, since nothing else shows it: once a second,
+  // traffic.sh reads the tunnel's counters, and two readings make a speed.
+  readonly property string trafficInterface: connectedProfile ? connectedProfile.interface : ""
+  readonly property bool measuringTraffic: opened && trafficInterface !== ""
+  readonly property bool showTraffic: measuringTraffic && selectedProfile !== null
+    && selectedProfile.id === connectedProfile.id
+  property var lastTraffic: null
+  property string lastTrafficInterface: ""
+  // The interface the reading in flight was taken from, so a tunnel that
+  // changes mid-reading is not diffed against the old one.
+  property string trafficReadingInterface: ""
+  property real downBps: 0
+  property real upBps: 0
+  property bool hasTrafficRate: false
 
   // Sign-in fields for the selected profile. Codes are cleared the moment a
   // connection starts; the username is kept, since it is not a secret.
@@ -223,6 +240,40 @@ Panel {
     focusTimer.restart()
   }
 
+  // ---- Traffic -------------------------------------------------------------
+
+  // Forget the last reading, so a speed is never averaged across the time the
+  // popup was closed.
+  function resetTraffic() {
+    root.lastTraffic = null
+    root.lastTrafficInterface = ""
+    root.hasTrafficRate = false
+  }
+
+  function sampleTraffic() {
+    if (root.trafficInterface === "" || trafficProc.running) return
+    root.trafficReadingInterface = root.trafficInterface
+    trafficProc.command = [root.trafficScriptPath, root.trafficReadingInterface]
+    trafficProc.running = true
+  }
+
+  function applyTraffic(text) {
+    var iface = root.trafficReadingInterface
+    var cur = Model.trafficReading(text)
+    var sameTunnel = cur !== null && iface !== "" && iface === root.lastTrafficInterface
+    var r = sameTunnel ? Model.rates(root.lastTraffic, cur) : null
+    root.lastTraffic = cur
+    root.lastTrafficInterface = cur ? iface : ""
+    if (r) {
+      root.downBps = r.down
+      root.upBps = r.up
+      root.hasTrafficRate = true
+    } else if (!sameTunnel) {
+      // A first reading, a new tunnel, or a blank one: wait for the next.
+      root.hasTrafficRate = false
+    }
+  }
+
   // ---- Import --------------------------------------------------------------
 
   function importSource(source) {
@@ -279,6 +330,7 @@ Panel {
 
   onOpenedChanged: {
     if (!opened) return
+    resetTraffic()
     sample()
     if (showSignIn) focusSignIn()
   }
@@ -342,6 +394,22 @@ Panel {
       waitForEnd: true
       onStreamFinished: root.finishImport(text)
     }
+  }
+
+  Process {
+    id: trafficProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyTraffic(text)
+    }
+  }
+
+  Timer {
+    interval: 1000
+    running: root.measuringTraffic
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: root.sampleTraffic()
   }
 
   // Poll fast only while something is changing; the popup being open is the
@@ -468,6 +536,36 @@ Panel {
                 onToggled: header.toggle()
               }
             }
+          }
+        }
+
+        // Downstream on the left and upstream on the right, for the tunnel of
+        // the connected profile while it is the one selected.
+        Item {
+          width: parent.width
+          visible: root.showTraffic
+          implicitHeight: Math.max(downText.implicitHeight, upText.implicitHeight)
+
+          Text {
+            id: downText
+            textFormat: Text.PlainText
+            text: "↓ Downstream  " + (root.hasTrafficRate ? Model.bitrate(root.downBps) : "—")
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+          }
+
+          Text {
+            id: upText
+            textFormat: Text.PlainText
+            text: "↑ Upstream  " + (root.hasTrafficRate ? Model.bitrate(root.upBps) : "—")
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
           }
         }
 

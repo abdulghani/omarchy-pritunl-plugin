@@ -25,7 +25,8 @@ function parse(text) {
       uptime: Number(p.uptime) || 0,
       serverAddress: String(p.server_address || ""),
       clientAddress: String(p.client_address || ""),
-      passwordMode: String(p.password_mode || "")
+      passwordMode: String(p.password_mode || ""),
+      interface: String(p.interface || "")
     })
   }
 
@@ -126,3 +127,43 @@ function ready(mode, values, username) {
     if (!String(values[c.fields[i].key] || "")) return false
   return true
 }
+
+// One traffic.sh line, "<rx_bytes> <tx_bytes> <uptime>", or null for a blank or
+// garbled reading.
+function trafficReading(text) {
+  var f = String(text || "").trim().split(/\s+/)
+  if (f.length < 3) return null
+  var rx = Number(f[0])
+  var tx = Number(f[1])
+  var t = Number(f[2])
+  if (!isFinite(rx) || !isFinite(tx) || !isFinite(t)) return null
+  return { rx: rx, tx: tx, t: t }
+}
+
+// Speed in bits per second each way between two readings of the same tunnel.
+// Counters that went backwards (the tunnel was torn down and rebuilt) or no
+// time between the readings give null instead of a nonsense spike.
+function rates(prev, cur) {
+  if (!prev || !cur) return null
+  var dt = cur.t - prev.t
+  var down = cur.rx - prev.rx
+  var up = cur.tx - prev.tx
+  if (dt <= 0 || down < 0 || up < 0) return null
+  return { down: down * 8 / dt, up: up * 8 / dt }
+}
+
+// "840 bps", "12.4 kbps", "3.1 Mbps", "120 Mbps" — bits, the way network speeds
+// are quoted and the way Omarchy's own speed test reports them.
+function bitrate(bps) {
+  var v = Math.max(0, Number(bps) || 0)
+  if (v < 1000) return Math.round(v) + " bps"
+  var units = ["kbps", "Mbps", "Gbps"]
+  var i = 0
+  v /= 1000
+  while (v >= 1000 && i < units.length - 1) {
+    v /= 1000
+    i++
+  }
+  return (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + " " + units[i]
+}
+
